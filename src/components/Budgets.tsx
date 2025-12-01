@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Target, TrendingUp, AlertCircle, X, TrendingDown, Award } from 'lucide-react';
+import { Plus, Target, TrendingUp, AlertCircle, X, TrendingDown, Award, Zap, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -13,6 +13,9 @@ interface Budget {
   category_name: string | null;
   start_date: string;
   end_date: string | null;
+  predictedEnd?: number;
+  daysRemaining?: number;
+  dailyAverage?: number;
 }
 
 export function Budgets() {
@@ -57,7 +60,7 @@ export function Budgets() {
 
         let query = supabase
           .from('transactions')
-          .select('amount')
+          .select('amount, transaction_date')
           .eq('user_id', user.id)
           .eq('type', 'expense')
           .gte('transaction_date', budget.start_date)
@@ -72,6 +75,12 @@ export function Budgets() {
         const spent = transactions?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
         const percentage = (spent / Number(budget.amount)) * 100;
 
+        const daysElapsed = Math.ceil((new Date().getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+        const daysTotal = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+        const daysRemaining = Math.max(0, daysTotal - daysElapsed);
+        const dailyAverage = daysElapsed > 0 ? spent / daysElapsed : 0;
+        const predictedEnd = dailyAverage * daysTotal;
+
         return {
           id: budget.id,
           name: budget.name,
@@ -82,6 +91,9 @@ export function Budgets() {
           category_name: budget.categories?.name || null,
           start_date: budget.start_date,
           end_date: budget.end_date,
+          daysRemaining,
+          dailyAverage,
+          predictedEnd,
         };
       })
     );
@@ -247,6 +259,38 @@ export function Budgets() {
                   </div>
                 </div>
 
+                <div className="space-y-2 pt-2 border-t border-gray-100">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1 text-gray-600">
+                      <Zap size={14} />
+                      Daily Avg
+                    </span>
+                    <span className="font-semibold text-gray-900">{formatCurrency(budget.dailyAverage || 0)}</span>
+                  </div>
+                  {budget.daysRemaining !== undefined && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1 text-gray-600">
+                        <Clock size={14} />
+                        Days Left
+                      </span>
+                      <span className="font-semibold text-gray-900">{budget.daysRemaining}</span>
+                    </div>
+                  )}
+                  {budget.predictedEnd !== undefined && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1 text-gray-600">
+                        <TrendingUp size={14} />
+                        Projected
+                      </span>
+                      <span className={`font-semibold ${
+                        budget.predictedEnd <= budget.amount ? 'text-emerald-600' : 'text-red-600'
+                      }`}>
+                        {formatCurrency(budget.predictedEnd)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 {budget.percentage >= 80 && (
                   <div className={`text-xs p-2 rounded-lg text-center ${
                     budget.percentage >= 100
@@ -255,7 +299,9 @@ export function Budgets() {
                   }`}>
                     {budget.percentage >= 100
                       ? 'Budget exceeded'
-                      : 'Approaching limit'}
+                      : budget.predictedEnd !== undefined && budget.predictedEnd > budget.amount
+                        ? 'On track to exceed'
+                        : 'Approaching limit'}
                   </div>
                 )}
               </div>
