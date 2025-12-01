@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, X, TrendingUp, Zap } from 'lucide-react';
+import { Plus, X, TrendingUp, Zap, PieChart as PieChartIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 
 interface Investment {
   id: string;
@@ -133,6 +134,32 @@ export function Investments() {
     }
   };
 
+  const getPortfolioAllocation = () => {
+    const allocation: Record<string, number> = {};
+    const CHART_COLORS: Record<string, string> = {
+      stocks: '#3b82f6',
+      mutual_funds: '#8b5cf6',
+      crypto: '#f97316',
+      gold: '#f59e0b',
+      real_estate: '#10b981',
+      other: '#6b7280'
+    };
+
+    investments.forEach(inv => {
+      if (inv.quantity && inv.current_price) {
+        const value = inv.quantity * inv.current_price;
+        const type = inv.type || 'other';
+        allocation[type] = (allocation[type] || 0) + value;
+      }
+    });
+
+    return Object.entries(allocation).map(([type, value]) => ({
+      name: type.replace('_', ' ').toUpperCase(),
+      value: Math.round(value),
+      color: CHART_COLORS[type] || CHART_COLORS.other
+    }));
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -184,6 +211,46 @@ export function Investments() {
           </div>
         </div>
       </div>
+
+      {investments.length > 0 && getPortfolioAllocation().length > 0 && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <PieChartIcon size={20} className="text-blue-600" />
+            Portfolio Allocation
+          </h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={getPortfolioAllocation()}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, value }) => {
+                  const total = getPortfolioAllocation().reduce((sum, item) => sum + item.value, 0);
+                  const percentage = ((value / total) * 100).toFixed(1);
+                  return `${name} ${percentage}%`;
+                }}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {getPortfolioAllocation().map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value: number) =>
+                  new Intl.NumberFormat('en-IN', {
+                    style: 'currency',
+                    currency: 'INR',
+                    maximumFractionDigits: 0,
+                  }).format(value)
+                }
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {investments.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border border-gray-200">

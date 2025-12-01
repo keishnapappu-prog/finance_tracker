@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, AlertCircle, Repeat, Eye, BarChart3, Target, Zap, TrendingUpIcon, Calendar, Clock } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, AlertCircle, Repeat, Eye, BarChart3, Target, Zap, TrendingUpIcon, Calendar, Clock, Heart, Lightbulb, Award } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SpendingTrendChart, NetCashFlowChart, CategoryBreakdownChart, SpendingPatternChart, ExpenseVsIncomeLineChart } from './charts/SpendingChart';
+import { aiFinancialAdvice } from '../services/aiFinancialAdvice';
 
 interface DashboardStats {
   totalBalance: number;
   monthlyIncome: number;
   monthlyExpense: number;
   savingsRate: number;
+  financialHealthScore: number;
+  topSpendingCategory: string;
+  spendingTrend: 'up' | 'down' | 'stable';
 }
 
 interface RecentTransaction {
@@ -54,17 +58,49 @@ export function Dashboard() {
     monthlyIncome: 0,
     monthlyExpense: 0,
     savingsRate: 0,
+    financialHealthScore: 0,
+    topSpendingCategory: '',
+    spendingTrend: 'stable',
   });
   const [recentTransactions, setRecentTransactions] = useState<RecentTransaction[]>([]);
   const [upcomingSubscriptions, setUpcomingSubscriptions] = useState<UpcomingSubscription[]>([]);
   const [budgetAlerts, setBudgetAlerts] = useState<BudgetAlert[]>([]);
   const [monthlyTrend, setMonthlyTrend] = useState<MonthlyTrendData[]>([]);
   const [categorySpending, setCategorySpending] = useState<CategorySpending[]>([]);
+  const [aiInsights, setAiInsights] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadDashboardData();
   }, [user]);
+
+  const calculateFinancialHealthScore = (income: number, expense: number, savingsRate: number, balance: number): number => {
+    let score = 0;
+
+    // Savings rate component (0-30 points)
+    if (savingsRate >= 30) score += 30;
+    else if (savingsRate >= 20) score += 25;
+    else if (savingsRate >= 10) score += 20;
+    else if (savingsRate >= 5) score += 15;
+    else score += 5;
+
+    // Expense to income ratio (0-30 points)
+    const expenseRatio = income > 0 ? (expense / income) * 100 : 100;
+    if (expenseRatio <= 60) score += 30;
+    else if (expenseRatio <= 70) score += 25;
+    else if (expenseRatio <= 80) score += 20;
+    else if (expenseRatio <= 90) score += 10;
+
+    // Balance health (0-40 points)
+    const monthlyBalance = income - expense;
+    if (balance > income * 2) score += 40;
+    else if (balance > income) score += 35;
+    else if (balance > monthlyBalance * 3) score += 30;
+    else if (balance > 0) score += 20;
+    else score += 5;
+
+    return Math.round(Math.min(100, score));
+  };
 
   const loadDashboardData = async () => {
     if (!user) return;
@@ -72,6 +108,7 @@ export function Dashboard() {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1).toISOString();
+    const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString();
 
     const [accountsRes, transactionsRes, recentRes, subscriptionsRes, budgetsRes, allTransactionsRes] = await Promise.all([
       supabase
@@ -127,7 +164,7 @@ export function Dashboard() {
       setStats(prev => ({ ...prev, totalBalance }));
     }
 
-    if (transactionsRes.data) {
+    if (transactionsRes.data && accountsRes.data) {
       const income = transactionsRes.data
         .filter(t => t.type === 'income')
         .reduce((sum, t) => sum + Number(t.amount), 0);
@@ -137,12 +174,16 @@ export function Dashboard() {
         .reduce((sum, t) => sum + Number(t.amount), 0);
 
       const savingsRate = income > 0 ? ((income - expense) / income) * 100 : 0;
+      const totalBalance = accountsRes.data.reduce((sum, acc) => sum + Number(acc.balance), 0);
+
+      const healthScore = calculateFinancialHealthScore(income, expense, savingsRate, totalBalance);
 
       setStats(prev => ({
         ...prev,
         monthlyIncome: income,
         monthlyExpense: expense,
         savingsRate: Math.max(0, savingsRate),
+        financialHealthScore: healthScore,
       }));
     }
 
@@ -236,9 +277,56 @@ export function Dashboard() {
         .slice(0, 5);
 
       setCategorySpending(topCategories);
+
+      // Calculate spending trend
+      if (trendArray.length >= 2) {
+        const recentExpense = trendArray[trendArray.length - 1]?.expense || 0;
+        const previousExpense = trendArray[trendArray.length - 2]?.expense || 0;
+        const trend = recentExpense > previousExpense * 1.1 ? 'up' : recentExpense < previousExpense * 0.9 ? 'down' : 'stable';
+
+        // Get top spending category
+        const topCategory = topCategories.length > 0 ? topCategories[0].name : '';
+
+        setStats(prev => ({
+          ...prev,
+          spendingTrend: trend,
+          topSpendingCategory: topCategory,
+        }));
+      }
+
+      // Generate AI insights
+      generateAiInsights(transactionsRes.data, categorySpendingMap, stats.monthlyIncome, stats.monthlyExpense);
     }
 
     setLoading(false);
+  };
+
+  const generateAiInsights = async (transactions: any[], categoryMap: Record<string, number>, income: number, expense: number) => {
+    const insights: string[] = [];
+
+    const expenseRatio = income > 0 ? (expense / income) * 100 : 0;
+
+    if (expenseRatio > 80) {
+      insights.push('Your spending is high relative to income. Try to reduce expenses or increase income.');
+    }
+
+    const topCategory = Object.entries(categoryMap).sort(([, a], [, b]) => b - a)[0];
+    if (topCategory) {
+      const categoryPercentage = (topCategory[1] / expense) * 100;
+      if (categoryPercentage > 40) {
+        insights.push(`${topCategory[0]} is your largest expense category at ${categoryPercentage.toFixed(0)}%. Consider optimizing here.`);
+      }
+    }
+
+    if (income > 0 && (income - expense) / income >= 0.3) {
+      insights.push('Excellent! You\'re saving over 30% of your income. Keep up this great habit!');
+    }
+
+    if (insights.length === 0) {
+      insights.push('Your finances look good! Keep tracking your expenses regularly.');
+    }
+
+    setAiInsights(insights.slice(0, 3));
   };
 
   const formatCurrency = (amount: number) => {
@@ -341,19 +429,29 @@ export function Dashboard() {
         </div>
 
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-          <h3 className="text-sm font-medium text-gray-600 mb-3">Financial Health</h3>
+          <h3 className="text-sm font-medium text-gray-600 mb-3 flex items-center gap-2">
+            <Heart size={16} className="text-red-500" />
+            Financial Health
+          </h3>
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
                 <span className="text-gray-600">Overall Score</span>
-                <span className="font-semibold text-emerald-600">75/100</span>
+                <span className={`font-semibold text-lg ${stats.financialHealthScore >= 75 ? 'text-emerald-600' : stats.financialHealthScore >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {stats.financialHealthScore}/100
+                </span>
               </div>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-emerald-500 to-blue-500" style={{ width: '75%' }} />
+              <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all ${stats.financialHealthScore >= 75 ? 'bg-gradient-to-r from-emerald-500 to-blue-500' : stats.financialHealthScore >= 50 ? 'bg-gradient-to-r from-amber-500 to-orange-500' : 'bg-gradient-to-r from-red-500 to-red-400'}`}
+                  style={{ width: `${stats.financialHealthScore}%` }}
+                />
               </div>
             </div>
             <div className="text-xs text-gray-600 pt-2 border-t border-gray-100">
-              Your savings rate is strong. Keep it up!
+              {stats.savingsRate >= 20 && 'Your savings rate is strong. Keep it up!'}
+              {stats.savingsRate < 20 && stats.savingsRate >= 10 && 'Good progress! Aim for higher savings.'}
+              {stats.savingsRate < 10 && 'Focus on increasing your savings rate.'}
             </div>
           </div>
         </div>
@@ -479,27 +577,27 @@ export function Dashboard() {
         </div>
 
         <div className="bg-gradient-to-br from-emerald-500 to-blue-500 rounded-xl p-6 shadow-lg text-white">
-          <h3 className="text-xl font-semibold mb-4">Quick Insights</h3>
+          <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <Lightbulb size={20} />
+            AI Insights
+          </h3>
           <div className="space-y-4">
             <div className="bg-white bg-opacity-20 rounded-lg p-4 backdrop-blur-sm">
               <div className="text-3xl font-bold mb-1">{formatCurrency(stats.monthlyIncome - stats.monthlyExpense)}</div>
               <div className="text-sm opacity-90">Net Cash Flow This Month</div>
             </div>
 
+            {aiInsights.map((insight, idx) => (
+              <div key={idx} className="bg-white bg-opacity-20 rounded-lg p-4 backdrop-blur-sm">
+                <div className="text-sm opacity-90 leading-relaxed">{insight}</div>
+              </div>
+            ))}
+
             {stats.monthlyExpense > stats.monthlyIncome && (
               <div className="bg-red-500 bg-opacity-30 rounded-lg p-4 backdrop-blur-sm border border-red-300">
                 <div className="font-semibold mb-1">Spending Alert</div>
                 <div className="text-sm opacity-90">
                   You've spent more than you earned this month. Consider reviewing your expenses.
-                </div>
-              </div>
-            )}
-
-            {stats.savingsRate >= 20 && (
-              <div className="bg-white bg-opacity-20 rounded-lg p-4 backdrop-blur-sm">
-                <div className="font-semibold mb-1">Great Job!</div>
-                <div className="text-sm opacity-90">
-                  You're saving {stats.savingsRate.toFixed(0)}% of your income. Keep it up!
                 </div>
               </div>
             )}
